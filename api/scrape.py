@@ -1,0 +1,12 @@
+api/
+  scrape.py
+  history.py
+db/
+  schema.sql
+pages/
+  index.js
+  history/[id].js
+vercel.json
+requirements.txt
+package.json
+README.md
