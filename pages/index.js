@@ -1,24 +1,64 @@
-import useSWR from 'swr';
-import Link from 'next/link';
+import { Pool } from "pg";
 
-const fetcher = url => fetch(url).then(r => r.json());
+export async function getServerSideProps() {
+  const pool = new Pool({
+    connectionString: process.env.POSTGRES_URL, // variabila de mediu din Vercel
+    ssl: { rejectUnauthorized: false }
+  });
 
-export default function Home() {
-  const { data, error } = useSWR('/api/scrape', fetcher, { refreshInterval: 600000 });
+  const client = await pool.connect();
+  const result = await client.query(`
+    SELECT p.id, p.name, p.url, ph.price, ph.checked_at
+    FROM products p
+    JOIN LATERAL (
+      SELECT price, checked_at
+      FROM price_history
+      WHERE product_id = p.id
+      ORDER BY checked_at DESC
+      LIMIT 1
+    ) ph ON true
+    ORDER BY p.id;
+  `);
 
-  if (error) return <div className="p-8">Eroare la încărcare.</div>;
-  if (!data) return <div className="p-8">Se încarcă...</div>;
+  client.release();
 
+  return {
+    props: {
+      products: result.rows.map(row => ({
+        id: row.id,
+        name: row.name,
+        url: row.url,
+        price: Number(row.price),
+        checked_at: row.checked_at.toString()
+      }))
+    }
+  };
+}
+
+export default function Home({ products }) {
   return (
-    <div className="p-8">
-      <h1 className="text-3xl mb-6 font-bold">eMAG Price Tracker</h1>
-      {data.map(p => (
-        <div key={p.id} className="border p-4 mb-4 rounded-lg">
-          <a href={p.url} target="_blank" rel="noopener noreferrer" className="text-lg font-semibold">{p.name}</a>
-          <div className="text-xl mt-2">{p.price ? `${p.price} ${p.currency}` : "Preț indisponibil"}</div>
-          <Link href={`/history/${p.id}`} className="text-blue-600 underline mt-2 block">Vezi istoric</Link>
-        </div>
-      ))}
+    <div style={{ padding: "20px", fontFamily: "Arial, sans-serif" }}>
+      <h1>eMAG Price Tracker</h1>
+      <table border="1" cellPadding="8" style={{ borderCollapse: "collapse", width: "100%" }}>
+        <thead>
+          <tr>
+            <th>Produs</th>
+            <th>Preț (RON)</th>
+            <th>Ultima verificare</th>
+            <th>Link</th>
+          </tr>
+        </thead>
+        <tbody>
+          {products.map(prod => (
+            <tr key={prod.id}>
+              <td>{prod.name}</td>
+              <td>{prod.price.toFixed(2)}</td>
+              <td>{new Date(prod.checked_at).toLocaleString()}</td>
+              <td><a href={prod.url} target="_blank" rel="noopener noreferrer">Vezi</a></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
