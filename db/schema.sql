@@ -1,15 +1,13 @@
-create table if not exists products (
-  id serial primary key,
-  url text unique not null,
-  name text,
-  currency text default 'RON',
-  created_at timestamptz default now()
+CREATE TABLE IF NOT EXISTS products (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-create table if not exists prices (
-  id serial primary key,
-  product_id int not null references products(id),
-  price_cents int not null,
-  currency text default 'RON',
-  created_at timestamptz default now()
+CREATE TABLE IF NOT EXISTS price_history (
+    id SERIAL PRIMARY KEY,
+    product_id INT REFERENCES products(id),
+    price NUMERIC(10, 2) NOT NULL,
+    checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
