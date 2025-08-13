@@ -1,1 +1,1 @@
-web: python api/index.py
+worker: python scraper.py
