@@ -1,66 +1,49 @@
-import os, json, requests, re
-from bs4 import BeautifulSoup
 import psycopg2
-from psycopg2.extras import RealDictCursor
+import requests
+from bs4 import BeautifulSoup
+import os
 from datetime import datetime
 
-DB_URL = os.environ["POSTGRES_URL"]
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-    "Accept-Language": "ro-RO,ro;q=0.9,en-US;q=0.8,en;q=0.7"
-}
+DATABASE_URL = os.getenv("POSTGRES_URL")  # Railway env var
 
 PRODUCTS = [
-    "https://www.emag.ro/placa-video-amd-sapphire-radeontm-rx-7900xtx-pulse-24gb-gddr6-384-bit-11322-02-20g/pd/D8KPF5MBM/",
-    "https://www.emag.ro/placa-video-gigabyte-geforce-rtxtm-5070-ti-eagle-oc-sff-16gb-gddr7-256-bit-gv-n507teagle-oc-16gd/pd/D7GQ7B3BM/",
-    "https://www.emag.ro/placa-video-palit-geforce-rtx-5070-ti-gamingpro-16gb-gddr7-256-bit-dlss-4-0-ne7507t019t2-gb2031a/pd/DGVT623BM/",
-    "https://www.emag.ro/placa-video-asus-tuf-gaming-geforce-rtxtm-5070-oc-edition-12gb-gddr7-192-bit-tuf-rtx5070-o12g-gaming/pd/DXLPN23BM/",
-    "https://www.emag.ro/placa-video-gigabyte-geforce-rtxtm-5070-ti-gaming-oc-16gb-gddr7-256-bit-gv-n507tgaming-oc-16gd/pd/DG8Q7B3BM/"
+    {"name": "Sapphire RX 7900XTX", "url": "https://www.emag.ro/placa-video-amd-sapphire-radeontm-rx-7900xtx-pulse-24gb-gddr6-384-bit-11322-02-20g/pd/D8KPF5MBM/"},
+    {"name": "Gigabyte RTX 5070 Ti Eagle", "url": "https://www.emag.ro/placa-video-gigabyte-geforce-rtxtm-5070-ti-eagle-oc-sff-16gb-gddr7-256-bit-gv-n507teagle-oc-16gd/pd/D7GQ7B3BM/"},
+    {"name": "Palit RTX 5070 Ti GamingPro", "url": "https://www.emag.ro/placa-video-palit-geforce-rtx-5070-ti-gamingpro-16gb-gddr7-256-bit-dlss-4-0-ne7507t019t2-gb2031a/pd/DGVT623BM/"},
+    {"name": "Asus TUF RTX 5070 OC", "url": "https://www.emag.ro/placa-video-asus-tuf-gaming-geforce-rtxtm-5070-oc-edition-12gb-gddr7-192-bit-tuf-rtx5070-o12g-gaming/pd/DXLPN23BM/"},
+    {"name": "Gigabyte RTX 5070 Ti Gaming OC", "url": "https://www.emag.ro/placa-video-gigabyte-geforce-rtxtm-5070-ti-gaming-oc-16gb-gddr7-256-bit-gv-n507tgaming-oc-16gd/pd/DG8Q7B3BM/"},
 ]
 
-def parse_price(text):
-    t = text.replace("\xa0", " ")
-    m = re.search(r"(\d[\d\. ]+)", t)
-    if not m: return None
-    return int(m.group(1).replace(".", "").replace(" ", "")) * 100
+def get_price(product_url):
+    response = requests.get(product_url, headers={"User-Agent": "Mozilla/5.0"})
+    soup = BeautifulSoup(response.text, "html.parser")
+    price_element = soup.select_one(".product-new-price")
+    if not price_element:
+        return None
+    price_text = price_element.get_text(strip=True)
+    price = "".join([c for c in price_text if c.isdigit()])
+    return float(price) / 100
 
-def scrape_emag(url):
-    r = requests.get(url, headers=HEADERS, timeout=20)
-    soup = BeautifulSoup(r.text, "lxml")
-    name = soup.find("title").get_text(strip=True).replace("- eMAG.ro", "").strip()
-    price_tag = soup.select_one(".product-new-price, meta[itemprop=price]")
-    if price_tag:
-        if price_tag.name == "meta":
-            price_cents = parse_price(price_tag["content"])
-        else:
-            price_cents = parse_price(price_tag.get_text())
-    else:
-        price_cents = None
-    return name, price_cents, "RON"
-
-def handler(request):
-    conn = psycopg2.connect(DB_URL, sslmode="require", cursor_factory=RealDictCursor)
+def main():
+    conn = psycopg2.connect(DATABASE_URL)
     cur = conn.cursor()
 
-    results = []
-    for url in PRODUCTS:
-        name, price_cents, currency = scrape_emag(url)
-        cur.execute("""
-            INSERT INTO products (url, name, currency)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (url) DO UPDATE SET name=EXCLUDED.name, currency=EXCLUDED.currency
-            RETURNING id;
-        """, (url, name, currency))
-        pid = cur.fetchone()["id"]
-        if price_cents:
-            cur.execute("""
-                INSERT INTO prices (product_id, price_cents, currency)
-                VALUES (%s, %s, %s);
-            """, (pid, price_cents, currency))
-        results.append({"id": pid, "url": url, "name": name, "price": price_cents / 100 if price_cents else None, "currency": currency})
+    for product in PRODUCTS:
+        cur.execute("INSERT INTO products (name, url) VALUES (%s, %s) ON CONFLICT DO NOTHING RETURNING id", (product["name"], product["url"]))
+        product_id = cur.fetchone()[0] if cur.rowcount > 0 else None
+
+        if not product_id:
+            cur.execute("SELECT id FROM products WHERE url = %s", (product["url"],))
+            product_id = cur.fetchone()[0]
+
+        price = get_price(product["url"])
+        if price:
+            cur.execute("INSERT INTO price_history (product_id, price) VALUES (%s, %s)", (product_id, price))
+            print(f"[{datetime.now()}] {product['name']}: {price} RON")
 
     conn.commit()
     cur.close()
     conn.close()
-    return (json.dumps(results), 200, {"Content-Type": "application/json"})
+
+if __name__ == "__main__":
+    main()
