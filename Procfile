@@ -1,1 +1,1 @@
-web: python api/history.py
+web: python api/index.py
